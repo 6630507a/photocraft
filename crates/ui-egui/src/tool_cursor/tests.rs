@@ -300,11 +300,17 @@ fn brush_hover_uses_an_os_bitmap_that_survives_motion_but_not_tool_or_panel_chan
     assert!(h.output().platform_output.cursor_image.is_some());
 
     // Windows has no stock hand (winit maps `Grab` to the move cursor), so the Hand gets the open
-    // hand as a bitmap too (#2196).
+    // hand as a bitmap too (#2196); macOS and the Linux themes draw their own.
     h.state_mut().ui.tool = crate::Tool::Hand;
     h.run_steps(2);
-    let hand = h.output().platform_output.cursor_image.clone().expect("the Hand's open hand reaches the OS as a bitmap");
-    assert_eq!(hand.rgba, rasterize(Shape::Hand { closed: false }, h.ctx.pixels_per_point()).unwrap().rgba);
+    let hand = h.output().platform_output.cursor_image.clone();
+    if cfg!(target_os = "windows") {
+        let hand = hand.expect("the Hand's open hand reaches the OS as a bitmap");
+        assert_eq!(hand.rgba, rasterize(Shape::Hand { closed: false }, h.ctx.pixels_per_point()).unwrap().rgba);
+    } else {
+        assert!(hand.is_none(), "the OS draws the hand");
+        assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Grab);
+    }
 
     h.state_mut().ui.tool = crate::Tool::Brush;
     h.state_mut().run("prefs.set", json!({"path": "cursors.painting", "value": "standard"})).unwrap();
