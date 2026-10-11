@@ -5593,7 +5593,9 @@ mod tests {
                     assert_eq!(st.doc.layer(layer).unwrap().content, original.content);
                     crate::channel_view::ensure(&mut app, &ctx, 0);
                     let mut delta = ctx.tex_manager().write().take_delta();
-                    assert!(delta.set.get(&tex).unwrap()[0].pos.is_some(), "commit keeps its partial upload");
+                    // The commit takes the live stroke's pixels, which the texture already shows: at
+                    // most a partial upload, never the whole mask again.
+                    assert!(delta.set.get(&tex).is_none_or(|u| u.iter().all(|u| u.pos.is_some())), "commit keeps its partial upload");
                     delta.clear();
                     app.session.undo();
                     assert_eq!(app.session.documents()[0].doc.layer(layer).unwrap(), &original);
