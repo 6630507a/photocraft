@@ -16,9 +16,10 @@ Exactly three colours:
 
 ## Geometry
 
-A 512-unit tile (`viewBox="0 0 512 512"`), rounded square with `rx=112`, no border. The macOS
-renders pad it onto Apple's 824/1024 icon grid; the Windows and Linux renders crop 22 units off
-each side so the figure reads at 16–48 px.
+A 512-unit tile (`viewBox="0 0 512 512"`), rounded square with `rx=112`, no border, the same
+tile as every Crafting App. The macOS renders pad it onto Apple's 824/1024 icon grid (transparent
+margin); the Windows and Linux renders use the tile edge to edge, so their rounded corners match
+the sibling apps'.
 
 ## Provenance
 
@@ -30,11 +31,13 @@ craftrules at `assets/app-icons/photocraft/source.png`. License: see `LICENSE.tx
 
 - `photocraft.svg`: canonical master (traced at 2048 px).
 - `photocraft-small.svg`: lighter trace (traced at 1024 px); also the hicolor scalable icon.
-- `photocraft-1024.png`: 1024 px render on the macOS grid.
+- `photocraft-1024.png`: the full tile at 1024 px (docs, store listings).
+- `photocraft-macos-512.png`: the tile with Apple's margin, 512 px; the runtime Dock icon on macOS.
 - `photocraft.icns`: macOS bundle icon (`CFBundleIconFile`).
 - `photocraft.ico`: Windows icon, 16–256 px, embedded in the `.exe` by `apps/photocraft/build.rs`.
 - `hicolor/<size>/apps/ai.storyteller.photocraft.png` (16–512) and `hicolor/scalable/...svg`:
-  Linux icon theme.
+  Linux icon theme; the 256 px PNG is also the runtime window icon on Windows and Linux, the 128 px
+  one the brand mark in the title bar.
 
 The app also sets the window icon and Wayland app ID at runtime (`apps/photocraft/src/app_icon.rs`,
 `main.rs`). On Windows the taskbar shows the icon of the Start Menu shortcut that launches the

@@ -14,8 +14,8 @@
 //! ID would need a Win32 call (`unsafe`, which the workspace forbids) and would then also have to
 //! be stamped on the shortcut, or the taskbar would stop matching the two.
 
-/// Window, taskbar and (when running unbundled) Dock icon. macOS gets the padded 1024 px render
-/// on Apple's icon grid; elsewhere the tighter 256 px hicolor render reads better at small sizes.
+/// Window, taskbar and (when running unbundled) Dock icon. macOS gets the 512 px render padded
+/// onto Apple's icon grid; elsewhere the full rounded tile (the 256 px hicolor render).
 pub fn window_icon() -> egui::IconData {
     match eframe::icon_data::from_png_bytes(PNG) {
         Ok(icon) => icon,
@@ -27,7 +27,7 @@ pub fn window_icon() -> egui::IconData {
 }
 
 #[cfg(target_os = "macos")]
-const PNG: &[u8] = include_bytes!("../../../assets/app-icon/photocraft-1024.png");
+const PNG: &[u8] = include_bytes!("../../../assets/app-icon/photocraft-macos-512.png");
 #[cfg(not(target_os = "macos"))]
 const PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.photocraft.png");
 

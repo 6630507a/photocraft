@@ -14,23 +14,23 @@ trap 'rm -rf "$TMP"' EXIT
 
 command -v resvg >/dev/null || { echo "error: resvg not found (brew install resvg)" >&2; exit 1; }
 
-# The artwork is a full-bleed 512-unit tile (rx=112). macOS icons pad it to Apple's 824/1024 body
-# grid (transparent margin). Windows and Linux icons crop 22 units off each side (into the
-# rounded corners) so the portrait reads at 16-48 px.
-grep -q 'viewBox="0 0 512 512"' "$SVG" || { echo "error: expected viewBox=\"0 0 512 512\" in $SVG" >&2; exit 1; }
+# The SVG is a full-bleed 512 tile (rx=112), used as-is on Windows and Linux so the rounded corners
+# match the other Crafting Apps. macOS icons follow Apple's grid: the tile is 824/1024 of the canvas
+# with a transparent margin, so widen the viewBox around it.
 MAC="$TMP/mac.svg"
-sed 's/viewBox="0 0 512 512"/viewBox="-62 -62 636 636"/' "$SVG" >"$MAC"
-TIGHT="$TMP/tight.svg"
-sed 's/viewBox="0 0 512 512"/viewBox="22 22 468 468"/' "$SVG" >"$TIGHT"
+sed 's/viewBox="0 0 512 512"/viewBox="-62.136 -62.136 636.272 636.272"/' "$SVG" >"$MAC"
+grep -q 'viewBox="-62.136' "$MAC" || { echo "error: $SVG has no 512 viewBox" >&2; exit 1; }
 
 render() { resvg -w "$2" -h "$2" "$1" "$3" </dev/null; }
 
-render "$MAC" 1024 "$DIR/photocraft-1024.png"
+render "$SVG" 1024 "$DIR/photocraft-1024.png"
+# Runtime window/Dock icon on macOS (embedded by apps/photocraft/src/app_icon.rs).
+render "$MAC" 512 "$DIR/photocraft-macos-512.png"
 
-# Linux hicolor theme.
+# Linux hicolor theme (the 256 one is also the runtime icon on Windows and Linux).
 for s in 16 24 32 48 64 128 256 512; do
   mkdir -p "$DIR/hicolor/${s}x${s}/apps"
-  render "$TIGHT" "$s" "$DIR/hicolor/${s}x${s}/apps/ai.storyteller.photocraft.png"
+  render "$SVG" "$s" "$DIR/hicolor/${s}x${s}/apps/ai.storyteller.photocraft.png"
 done
 mkdir -p "$DIR/hicolor/scalable/apps"
 # The lighter trace (photocraft-small.svg) keeps the scalable theme icon cheap to render.
@@ -39,7 +39,7 @@ cp "$DIR/photocraft-small.svg" "$DIR/hicolor/scalable/apps/ai.storyteller.photoc
 # Windows .ico.
 ICO_PNGS=()
 for s in 16 20 24 32 40 48 64 128 256; do
-  render "$TIGHT" "$s" "$TMP/ico-$s.png"
+  render "$SVG" "$s" "$TMP/ico-$s.png"
   ICO_PNGS+=("$TMP/ico-$s.png")
 done
 (cd "$ROOT" && cargo run -q -p xtask -- ico "$DIR/photocraft.ico" "${ICO_PNGS[@]}")
