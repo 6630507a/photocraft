@@ -123,12 +123,23 @@ pub fn split_gray_selected(s: &Surface, sel: &Surface) -> Result<Option<(Surface
 /// [`warp_gray`] limited to a selection: only the selected values move (the vacated area reads as
 /// the default), as the selected pixels of the layer do.
 pub(crate) fn warp_gray_selected(s: &Surface, sel: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
-    let Some((lifted, mut out)) = split_gray_selected(s, sel)? else { return warp_gray(s, h, interp) };
+    move_gray_selected(s, sel, &|lifted, src| Ok(warp_surface(lifted, src, h, interp)?), &|s| warp_gray(s, h, interp))
+}
+
+/// [`warp_gray_selected`] with any geometric warp: `warp` moves the lifted grey + alpha values
+/// (given their bounds), `whole` moves `s` when it isn't a single grey channel.
+pub(crate) fn move_gray_selected(
+    s: &Surface,
+    sel: &Surface,
+    warp: &dyn Fn(&Surface, Rect) -> Result<Surface>,
+    whole: &dyn Fn(&Surface) -> Result<Surface>,
+) -> Result<Surface> {
+    let Some((lifted, mut out)) = split_gray_selected(s, sel)? else { return whole(s) };
     let src = lifted.content_bounds();
     if src.is_empty() {
         return Ok(out);
     }
-    let w = warp_surface(&lifted, src, h, interp)?;
+    let w = warp(&lifted, src)?;
     let b = w.content_bounds();
     if !b.is_empty() {
         let moved = crate::allocation::read_region(&w, b, "compositing transformed mask pixels")?;
@@ -247,12 +258,11 @@ pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut L
             };
             t.transform = a.mul(&t.transform);
         }
-        LayerContent::Shape(sh) => {
-            let Some(a) = affine else {
-                return Err(EngineError::Other("Distort and Perspective need a rasterized shape (Layer › Rasterize › Shape)".into()));
-            };
-            crate::vector_cmds::transform_shape(sh, &a);
-        }
+        LayerContent::Shape(sh) => match affine {
+            Some(a) => crate::vector_cmds::transform_shape(sh, &a),
+            // Distort and Perspective map the path and keep the shape (#3009).
+            None => crate::vector_cmds::map_shape(sh, Some(h), None)?,
+        },
         LayerContent::Smart(sm) => {
             // Smart objects keep the transform and re-render from their source afterwards
             // (`refresh_text`), so repeated transforms don't degrade the pixels. Distort and
@@ -297,9 +307,11 @@ pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut L
     }
     if let Some(vm) = l.vector_mask.as_mut()
         && vm.linked
-        && let Some(a) = affine
     {
-        vm.path = vm.path.transform(&a);
+        vm.path = match affine {
+            Some(a) => vm.path.transform(&a),
+            None => crate::vector_cmds::map_path(&vm.path, Some(h), None)?,
+        };
     }
     Ok(())
 }
@@ -634,7 +646,24 @@ mod tests {
         assert_eq!(active_bounds(&s), Rect::new(40, 15, 80, 35));
         s.execute("edit.transform", json!({"matrix": [2, 0, 0, 2, -40, -15]})).unwrap();
         assert_eq!(active_bounds(&s), Rect::new(40, 15, 120, 55));
-        assert!(s.execute("edit.transform", json!({"quad": [[40, 15], [120, 15], [130, 55], [30, 55]]})).is_err());
+        // Distort maps the path and keeps a live shape (#3009): the rectangle's corners go to the quad.
+        let quad = [[40.0, 15.0], [120.0, 15.0], [130.0, 55.0], [30.0, 55.0]];
+        s.execute("edit.transform", json!({ "quad": quad })).unwrap();
+        let st = s.active().unwrap();
+        let LayerContent::Shape(sh) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("still a shape layer") };
+        let mut anchors: Vec<[f64; 2]> = sh.path.subpaths[0].knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect();
+        let mut want = quad.to_vec();
+        anchors.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        want.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(anchors.iter().zip(&want).all(|(a, b)| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6), "{anchors:?}");
+        assert!(sh.live.is_none(), "the live rectangle is now a path");
+        assert_eq!(active_bounds(&s), Rect::new(30, 15, 130, 55));
+        // Warp bends the path too: the arc adds anchors along the curved edges.
+        s.execute("edit.transform.warp", json!({"style": "arc", "bend": 50})).unwrap();
+        let st = s.active().unwrap();
+        let LayerContent::Shape(sh) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("still a shape layer") };
+        assert!(sh.path.subpaths[0].knots.len() > 4, "{}", sh.path.subpaths[0].knots.len());
+        assert!(!active_bounds(&s).is_empty());
     }
 
     #[test]
