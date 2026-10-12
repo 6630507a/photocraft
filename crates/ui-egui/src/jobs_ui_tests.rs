@@ -408,7 +408,7 @@ fn saves_run_in_the_background_and_are_recorded_when_they_end() {
     assert!(h.state().saving());
 
     // The window keeps drawing; the document stays unsaved and can't be edited meanwhile.
-    let (frames, _) = frames_until(&mut h, 4, |h| h.query_all_by_label("Saving big.psd").count() == 2);
+    let (frames, _) = frames_until(&mut h, 4, |h| h.query_by_label("Encoding").is_some());
     assert!(h.state().saving(), "the save is still encoding after {frames} frames");
     let st = h.state().session.active().unwrap();
     assert!(st.is_dirty() && st.path.is_none());
