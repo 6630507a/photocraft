@@ -126,6 +126,9 @@ pub struct Drag {
     /// A Brush/Eraser stroke that erases: the Eraser, or a right-button Brush drag with
     /// Preferences › Tools › Right-click with painting tools set to Erase.
     pub erase: bool,
+    /// A Brush or Pencil stroke in Photoshop's Clear mode (`paint_mouse::clears`, #3439): it
+    /// erases, sent as `"mode": "clear"` so History names the tool rather than the Eraser.
+    pub clear: bool,
     /// ⇧ constraint of a painting stroke (stroke_constraint.rs).
     pub constrain: Option<crate::stroke_constraint::Axis>,
     /// Modifiers held now (updated on every pointer event of the gesture).
@@ -150,6 +153,7 @@ impl Drag {
             points,
             modifiers,
             erase,
+            clear: false,
             constrain: None,
             live: modifiers,
             released: egui::Modifiers::NONE,
@@ -471,8 +475,12 @@ fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke> {
 
 /// `paint.stroke` params for a Brush/Eraser drag (shared by the live preview and the commit). The
 /// stroke smoothing is the session brush's (the options bar's Smoothing %).
-fn stroke_params(app: &PhotocraftApp, tool: Tool, erase: bool, points: &[Vec<f64>]) -> serde_json::Value {
-    let mut p = json!({ "points": points, "erase": erase, "zoom": app.point_zoom(), "target": paint_target(app) });
+fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) -> serde_json::Value {
+    let tool = d.tool;
+    let mut p = json!({ "points": points, "erase": d.erase, "zoom": app.point_zoom(), "target": paint_target(app) });
+    if d.clear {
+        p["mode"] = json!("clear");
+    }
     if tool == Tool::Pencil {
         p["autoErase"] = json!(app.ui.tool_options.pencil_auto_erase);
     }
@@ -631,7 +639,7 @@ fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         p["target"] = paint_target(app);
         EngineStroke::Retouch(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?)
     } else {
-        let p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
+        let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
         EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(app, d.tool), &p).ok()?))
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
@@ -1772,7 +1780,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         .documents()
         .iter()
         .map(|st| {
-            let name = format!("{}{}", st.doc.name, if st.is_dirty() { " *" } else { "" });
+            let name = studio_tab_name(app, st);
             ui.painter().layout_no_wrap(name, font.clone(), t.text).size().x
                 + ui.painter().layout_no_wrap(format!("{}/{}", mode_label(&st.doc), st.doc.depth.bits()), meta_font.clone(), t.text_faint).size().x
                 + STUDIO_TAB_PAD
@@ -1802,7 +1810,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         for &(i, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
             let Some(st) = app.session.documents().get(i) else { continue };
             let sel = Some(i) == active && !focused_open;
-            let name = format!("{}{}", st.doc.name, if st.is_dirty() { " *" } else { "" });
+            let name = studio_tab_name(app, st);
             let meta = format!("{}/{}", mode_label(&st.doc), st.doc.depth.bits());
             let natural_w = natural.get(i).copied().unwrap_or(0.0);
             let meta_g = ui.painter().layout_no_wrap(meta, meta_font.clone(), t.text_faint);
@@ -1811,7 +1819,11 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             // The title was cut: the tooltip has the rest of it.
             let cut = name_g.size().x + 0.5 < natural_w - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x;
             let resp = ui.interact(r, ui.id().with(("dtab", i)), Sense::click_and_drag());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, &st.doc.name));
+            let saving = crate::jobs_ui::save_progress(app, st.doc.id);
+            resp.widget_info(|| {
+                let label = saving.as_ref().map_or_else(|| st.doc.name.clone(), |s| format!("{} - {s}", st.doc.name));
+                egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, label)
+            });
             doc_tabs.push((i, r));
             if sel {
                 ui.painter().rect_filled(r, t.radius_sm, t.card);
@@ -2019,7 +2031,15 @@ fn pro_tab_title(app: &PhotocraftApp, i: usize) -> String {
     let mask = app.session.active_index() == Some(i) && app.ui.mask_target && active_layer.is_some_and(|l| l.mask.is_some());
     let model = if mask { tl!("Layer Mask").to_string() } else { mode_label(&st.doc).to_string() };
     let layer = active_layer.map(|l| format!("{}, ", l.name)).unwrap_or_default();
-    format!("{} @ {}% ({layer}{model}/{}){}", st.doc.name, fmt_zoom(zoom), st.doc.depth.bits(), if st.is_dirty() { "*" } else { "" })
+    // A save in progress: "name @ 100% (Layer 1, RGB/16) - Saving 45%", as Photoshop does (#3389).
+    let saving = crate::jobs_ui::save_progress(app, st.doc.id).map(|s| format!(" - {s}")).unwrap_or_default();
+    format!("{} @ {}% ({layer}{model}/{}){}{saving}", st.doc.name, fmt_zoom(zoom), st.doc.depth.bits(), if st.is_dirty() { "*" } else { "" })
+}
+
+/// The Studio strip's tab name: "name *" when unsaved, "name * - Saving 45%" while it saves (#3389).
+fn studio_tab_name(app: &PhotocraftApp, st: &photocraft_engine::DocState) -> String {
+    let saving = crate::jobs_ui::save_progress(app, st.doc.id).map(|s| format!(" - {s}")).unwrap_or_default();
+    format!("{}{}{saving}", st.doc.name, if st.is_dirty() { " *" } else { "" })
 }
 
 /// Photoshop document tabs: "name @ 33.3% (RGB/8)" on a dark strip; active tab matches panels.
@@ -2814,6 +2834,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // ⌘ held: this frame's gestures go to the Move tool (`PhotocraftApp::active_tool`). The Hand
     // and Zoom never reach `tool_event`, so only the Move needs the state machine to know.
     app.tool_override = (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move);
+    // `~` held: a Brush or Pencil stroke that starts now erases (`tool_event`'s `Down`).
+    app.held_erase = crate::hold_keys::erase_held(app, &ctx);
     // Zoom direction: the temporary zoom key decides, else ⌥ (Zoom tool), held or latched in
     // Window › Modifier Keys (the way around a desktop that takes Alt+click, `alt_grab`).
     let sticky_alt = app.ui.shell.sticky_alt;
@@ -3419,9 +3441,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                                 }
                                 egui::CursorIcon::None
                             }
+                            // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
+                            // traces its outline; a plain round tip keeps the circle.
                             _ => {
                                 let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip, r);
-                                crate::tool_cursor::circle(&painter, p, r, centre)
+                                crate::brush_cursor::cursor(&painter, p, brush, full, cur.painting == PaintingCursor::NormalTip, centre)
                             }
                         }
                     }
@@ -4597,7 +4621,9 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 _ => {}
             }
             crate::paint_mouse::sync_tool_brush(app);
-            let erase = tool == Tool::Eraser || std::mem::take(&mut app.secondary_erase);
+            // Clear mode (`~` held, or chosen in the options bar) erases with the tool's own brush.
+            let clear = crate::paint_mouse::clears(app, tool);
+            let erase = std::mem::take(&mut app.secondary_erase) || tool == Tool::Eraser || clear;
             // ⇧-click connects to the last endpoint, including its pen pressure (#2827), so
             // the renderer interpolates size and opacity across the segment.
             let active = app.session.active().map(|st| st.doc.id);
@@ -4608,7 +4634,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // ⌥ flips Dodge/Burn and Blur/Sharpen for this stroke.
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
-            app.drag = Some(Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase));
+            app.drag = Some(Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) });
             app.trail = None;
             app.stylus.begin_stroke();
             if from.is_some() {
@@ -4835,7 +4861,7 @@ fn finish_selection_drag(app: &mut PhotocraftApp, floating: bool, start: [f64; 2
 /// the canvas then refreshes only what it hadn't shown yet (`CommittedStroke`).
 fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
     let live = app.live_stroke.take();
-    let mut p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
+    let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
     if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
         p["seed"] = json!(seed);
     }
