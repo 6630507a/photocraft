@@ -15,6 +15,11 @@ use crate::blocks;
 use crate::pixels::{deinterleave, encode_be, psd_depth};
 use crate::psd_import::REGENERATED;
 
+/// Blocks that define a layer's content as something other than pixels: fill (`SoCo`, `GdFl`,
+/// `PtFl`), placed / smart object (`SoLd`, `PlLd`, `SoLE`), type (`TySh`), shape fill and stroke
+/// (`vscg`, `vstk`). A raster layer never writes them, nor adjustment blocks.
+const RASTER_STALE_KEYS: [&[u8; 4]; 9] = [b"SoCo", b"GdFl", b"PtFl", b"SoLd", b"PlLd", b"SoLE", b"TySh", b"vscg", b"vstk"];
+
 const PSD_MAX_FILE_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 const PSD_ESTIMATE_FIXED_OVERHEAD: u64 = 1024 * 1024;
 const PSD_ESTIMATE_LAYER_OVERHEAD: u64 = 64 * 1024;
@@ -584,7 +589,15 @@ impl Ex {
                     self.smart_blocks(l, sm, parsed, &mut raw);
                 }
             }
-            LayerContent::Raster(_) | LayerContent::Group(_) => {}
+            // A pixel layer carries no content-defining blocks: a fill, placed (smart), type or
+            // shape-content block left over from before Rasterize would make a reader (ours or
+            // Photoshop's) reopen the layer as that kind and discard the pixels. A vector mask
+            // (`vmsk`/`vsms`, with its live-shape `vogk`) stays.
+            LayerContent::Raster(_) => {
+                let masked = l.vector_mask.is_some();
+                raw.retain(|(k, _)| !RASTER_STALE_KEYS.contains(&k) && !adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd" && !(k == b"vogk" && !masked));
+            }
+            LayerContent::Group(_) => {}
         }
         // Effects reference point: written from the field (in place, keeping block order).
         match l.effects.reference {
