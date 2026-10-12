@@ -89,7 +89,7 @@ fn raster_layer_with_stale_blocks_writes_none() {
     assert!(l.psd_blocks.iter().any(|(k, _)| k == b"SoCo"));
     l.content = LayerContent::Raster(photocraft_raster::Surface::new(fmt));
     l.psd_blocks.push((*b"TySh", std::sync::Arc::new(vec![0; 8])));
-    l.psd_blocks.push((*b"vstk", std::sync::Arc::new(vec![0; 8])));
+    l.psd_blocks.push((*b"vscg", std::sync::Arc::new(vec![0; 8])));
     l.psd_blocks.push((*b"levl", std::sync::Arc::new(vec![0; 8])));
     assert!(!has_block(&doc, &name, &[b"SoCo", b"TySh", b"vstk", b"vscg", b"SoLd", b"PlLd", b"levl"]));
     assert_eq!(kind_named(&reopen(&doc), &name), "raster");
