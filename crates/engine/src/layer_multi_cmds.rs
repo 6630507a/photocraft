@@ -1312,6 +1312,9 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
         let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
         let mut merged = Layer::raster(top.name.clone(), fmt);
         merged.locks = top.locks;
+        merged.label = top.label;
+        // Clipped layers of one chain merge into a layer still clipped to their base.
+        merged.clipped = solo.layers.iter().all(|l| l.clipped);
         *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers_uncropped(&solo, fmt);
         let mid = merged.id;
         // Hidden selected layers are discarded, as in Photoshop.

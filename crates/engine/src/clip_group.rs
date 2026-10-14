@@ -51,6 +51,14 @@ fn clipped_to(doc: &Document, id: LayerId) -> Vec<LayerId> {
     }
 }
 
+/// The clipped layers directly above `id` among its siblings (Release Clipping Mask releases them
+/// with it).
+pub(crate) fn clipped_above(doc: &Document, id: LayerId) -> Vec<LayerId> {
+    let Some(path) = doc.path_of(id) else { return Vec::new() };
+    let Some((list, idx)) = siblings(doc, &path) else { return Vec::new() };
+    list.iter().skip(idx.saturating_add(1)).take_while(|l| l.clipped).map(|l| l.id).collect()
+}
+
 /// The clip groups of layers about to move or be deleted, read before they leave their slots.
 #[derive(Default)]
 pub(crate) struct Before {
