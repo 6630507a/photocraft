@@ -961,8 +961,9 @@ fn align(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
             "canvas" => doc.bounds(),
             "selection" => doc.selection.as_ref().map(|m| m.content_bounds()).ok_or_else(|| EngineError::Other("there is no selection to align to".into()))?,
             "auto" | "layers" => match (&doc.selection, sel.len()) {
-                // Photoshop: one layer plus an active selection aligns to the selection bounds.
-                (Some(m), 1) if to == "auto" => m.content_bounds(),
+                // Photoshop: with an active selection, the layers align to its bounds (Layer › Align
+                // Layers to Selection), however many are selected.
+                (Some(m), _) if to == "auto" && !m.content_bounds().is_empty() => m.content_bounds(),
                 // One layer with no selection aligns to the canvas (otherwise it would align to itself).
                 (None, 1) if to == "auto" => doc.bounds(),
                 _ => items.iter().fold(Rect::EMPTY, |a, (_, b)| a.union(b)),
