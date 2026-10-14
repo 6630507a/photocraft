@@ -1518,8 +1518,9 @@ const LAYER_PCT_W: f32 = 66.0 + widgets::POPUP_ARROW_W;
 
 /// The `layer.setProps` edit of a Layers panel Opacity or Fill (`key`) field at `pct` percent. A
 /// drag of the pop-up slider (`drag`) coalesces into one history step, as in Photoshop.
-fn pct_action(l: &Layer, key: &str, pct: f32, drag: Option<u64>) -> (String, Value) {
-    let mut p = json!({"layer": l.id.0, key: pct / 100.0});
+fn pct_action(target: &Value, key: &str, pct: f32, drag: Option<u64>) -> (String, Value) {
+    let mut p = target.clone();
+    p[key] = json!(pct / 100.0);
     if let Some(n) = drag {
         p["coalesce"] = json!(format!("layer-{key}-slider:{n}"));
     }
@@ -2233,6 +2234,13 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(l) = active_layer {
         // Photoshop greys blend mode, Opacity and Fill for the Background layer.
         let bg = crate::doc_props_ui::is_background(&doc, l);
+        // With several layers selected, blend mode, Opacity, Fill and the locks change every one
+        // of them, as in Photoshop; the controls show the active layer's values.
+        let targets = if selection.len() > 1 && selection.contains(&l.id) {
+            json!({"layers": selection.iter().map(|id| id.0).collect::<Vec<_>>()})
+        } else {
+            json!({"layer": l.id.0})
+        };
         ui.horizontal(|ui| {
             ui.add_enabled_ui(!bg, |ui| {
                 let mut m = l.blend;
@@ -2245,7 +2253,9 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let (chosen, hovered) = widgets::dropdown_wheel_hovered(ui, "blend", &mut m, &blend_options(l.is_group(), l.blend), blend_width);
                 // One step per choice: a click, an arrow key or each wheel notch (#1747).
                 for m in &chosen {
-                    actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "blend": m.label()})));
+                    let mut p = targets.clone();
+                    p["blend"] = json!(m.label());
+                    actions.push(("layer.setProps".into(), p));
                 }
                 // Hovering a mode previews it on the canvas (#970).
                 crate::blend_preview::hover(app, l.id, hovered.filter(|_| chosen.is_empty()));
@@ -2259,7 +2269,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         widgets::PopupFieldResponse::default()
                     };
                     if field.changed || scrub.changed {
-                        actions.push(pct_action(l, "opacity", o, scrub.drag.or(field.drag)));
+                        actions.push(pct_action(&targets, "opacity", o, scrub.drag.or(field.drag)));
                     }
                 });
             });
@@ -2295,7 +2305,9 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         // Lock Image Pixels includes Lock Transparent Pixels, which waits for it (#4892).
                         let enabled = key != "transparency" || !lk.pixels;
                         if ui.add_enabled_ui(enabled, |ui| icons::button(ui, icon, 20.0, on, tip)).inner.clicked() {
-                            actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "locks": { key: !on }})));
+                            let mut p = targets.clone();
+                            p["locks"] = json!({ key: !on });
+                            actions.push(("layer.setProps".into(), p));
                         }
                     }
                 });
@@ -2312,7 +2324,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     let field = widgets::popup_value_field(ui, fill_label, &mut f, 0.0..=100.0, "%", LAYER_PCT_W);
                     let scrub = scrub_pct_label(ui, fill_label, &mut f, ui.available_width());
                     if field.changed || scrub.changed {
-                        actions.push(pct_action(l, "fill", f, scrub.drag.or(field.drag)));
+                        actions.push(pct_action(&targets, "fill", f, scrub.drag.or(field.drag)));
                     }
                 })
             });
