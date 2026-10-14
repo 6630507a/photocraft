@@ -2642,6 +2642,8 @@ mod transform_fx_tests;
 mod layer_props_ui_tests;
 #[cfg(test)]
 mod transform_undo_tests;
+#[cfg(test)]
+mod transform_switch_tests;
 
 #[cfg(test)]
 mod transform_type_tests;
