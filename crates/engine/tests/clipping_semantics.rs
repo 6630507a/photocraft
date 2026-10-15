@@ -47,6 +47,17 @@ fn merging_clipped_layers_keeps_the_result_clipped() {
     s.execute("layer.select", json!({"layer": c2, "mode": "add"})).unwrap();
     let r = s.execute("layer.mergeLayers", json!({})).unwrap();
     assert!(clipped(&s, r["layer"].as_u64().unwrap()), "C1 + C2 merged stay clipped");
+    // Clipped layers of two chains (Background, B, C1*, E, D*: C1 clipped to B, D to E) merge
+    // into an ordinary layer: kept clipped at D's slot, C1's pixels would clip to E.
+    let (mut s, [_, c1, e]) = stack();
+    s.execute("layer.setProps", json!({"layer": e, "clipped": false})).unwrap();
+    let d = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s.execute("layer.setProps", json!({"layer": d, "clipped": true})).unwrap();
+    s.execute("layer.select", json!({"layer": c1})).unwrap();
+    s.execute("layer.select", json!({"layer": d, "mode": "add"})).unwrap();
+    let r = s.execute("layer.mergeLayers", json!({})).unwrap();
+    assert!(!clipped(&s, r["layer"].as_u64().unwrap()), "C1 + D come from two clip chains");
     // Merging the base with its clipped layers gives an ordinary layer.
     let (mut s, [b, _, c2]) = stack();
     s.execute("layer.select", json!({"layer": b})).unwrap();

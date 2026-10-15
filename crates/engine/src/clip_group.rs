@@ -42,6 +42,11 @@ fn group_of(doc: &Document, id: LayerId) -> Vec<LayerId> {
     if group.len() > 1 { group } else { Vec::new() }
 }
 
+/// The base `id` clips to (itself when it is a base), when it is in a clip group.
+pub(crate) fn base_of(doc: &Document, id: LayerId) -> Option<LayerId> {
+    group_of(doc, id).first().copied()
+}
+
 /// The layers clipped to `id`: the clipped run directly above it. Empty when `id` is itself
 /// clipped (it is not a base) or nothing is clipped to it.
 fn clipped_to(doc: &Document, id: LayerId) -> Vec<LayerId> {
