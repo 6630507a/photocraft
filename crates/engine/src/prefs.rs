@@ -2188,6 +2188,9 @@ fn writable(path: &str) -> std::result::Result<(), String> {
     if p.is_dir() {
         return Err("is a folder".into());
     }
+    if std::fs::metadata(p).is_ok_and(|m| m.permissions().readonly()) {
+        return Err("is read-only".into());
+    }
     match p.parent().filter(|d| !d.as_os_str().is_empty()) {
         Some(d) if !d.is_dir() => Err("its folder doesn't exist".into()),
         _ => Ok(()),
@@ -2274,38 +2277,58 @@ pub(crate) fn write_files_atomically(
     }
     // (target, its backup) of each file moved in so far.
     let mut moved: Vec<(&Path, Option<PathBuf>)> = Vec::new();
-    let undo = |moved: &[(&Path, Option<PathBuf>)]| {
+    // Put each backup back over its target (a target that had none is removed). What couldn't be
+    // put back is named, so the user can find their previous file.
+    let undo = |moved: &[(&Path, Option<PathBuf>)]| -> String {
+        let mut stranded = Vec::new();
         for (target, backup) in moved.iter().rev() {
-            let _ = std::fs::remove_file(target);
-            if let Some(b) = backup {
-                let _ = rename(b, target);
+            match backup {
+                Some(b) => {
+                    if rename(b, target).is_err() {
+                        stranded.push(format!("the previous {} is at {}", target.display(), b.display()));
+                    }
+                }
+                None => {
+                    let _ = std::fs::remove_file(target);
+                }
             }
         }
+        if stranded.is_empty() { String::new() } else { format!(" ({})", stranded.join("; ")) }
     };
     for ((path, _), tmp) in files.iter().zip(&staged) {
         let target = Path::new(*path);
         let backup = if target.exists() {
-            match sibling(path, "bak").and_then(|(b, f)| {
+            let moved_aside = sibling(path, "bak").and_then(|(b, f)| {
                 drop(f);
-                rename(target, &b).map(|()| b)
-            }) {
+                match rename(target, &b) {
+                    Ok(()) => Ok(b),
+                    Err(e) => {
+                        // The placeholder the backup name reserved goes too.
+                        let _ = std::fs::remove_file(&b);
+                        Err(e)
+                    }
+                }
+            });
+            match moved_aside {
                 Ok(b) => Some(b),
                 Err(e) => {
-                    undo(&moved);
+                    let stranded = undo(&moved);
                     drop_all(&staged);
-                    return Err(format!("{path}: {e}"));
+                    return Err(format!("{path}: {e}{stranded}"));
                 }
             }
         } else {
             None
         };
         if let Err(e) = rename(tmp, target) {
-            if let Some(b) = &backup {
-                let _ = rename(b, target);
+            let mut stranded = undo(&moved);
+            if let Some(b) = &backup
+                && rename(b, target).is_err()
+            {
+                stranded = format!("{stranded} (the previous {path} is at {})", b.display());
             }
-            undo(&moved);
             drop_all(&staged);
-            return Err(format!("{path}: {e}"));
+            return Err(format!("{path}: {e}{stranded}"));
         }
         moved.push((target, backup));
     }

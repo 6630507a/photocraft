@@ -125,3 +125,22 @@ fn sets_read_and_write_files_and_export_everything() {
     assert!(left.is_empty(), "{left:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_read_only_target_is_refused_before_anything_is_written() {
+    let dir = std::env::temp_dir().join(format!("photocraft-readonly-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ro = dir.join("locked.kys");
+    std::fs::write(&ro, "locked").unwrap();
+    let mut perms = std::fs::metadata(&ro).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&ro, perms.clone()).unwrap();
+    let mut s = Session::new();
+    let r = s.execute("edit.keyboardShortcuts", json!({"set": {"edit.copy": "F10"}, "exportKys": {"path": ro.to_str().unwrap()}}));
+    assert!(r.as_ref().is_err_and(|e| e.to_string().contains("read-only")), "{r:?}");
+    assert_eq!(std::fs::read_to_string(&ro).unwrap(), "locked");
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    let _ = std::fs::set_permissions(&ro, perms);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -853,6 +853,20 @@ fn exports_are_written_all_or_nothing() {
     assert_eq!((std::fs::read_to_string(&a).unwrap(), std::fs::read_to_string(&b).unwrap()), ("old A".into(), "old B".into()));
     let leftovers = || std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().contains(".photocraft-")).count();
     assert_eq!(leftovers(), 0);
+    // A backup move that fails leaves no empty placeholder behind.
+    let backups = std::cell::Cell::new(0);
+    let failing_backup = |from: &std::path::Path, to: &std::path::Path| {
+        if to.to_string_lossy().ends_with("photocraft-bak") {
+            backups.set(backups.get() + 1);
+            if backups.get() == 2 {
+                return Err(std::io::Error::other("locked"));
+            }
+        }
+        std::fs::rename(from, to)
+    };
+    assert!(write_files_atomically(&[(pa, "new A"), (pb, "new B")], &failing_backup).is_err());
+    assert_eq!((std::fs::read_to_string(&a).unwrap(), std::fs::read_to_string(&b).unwrap()), ("old A".into(), "old B".into()));
+    assert_eq!(leftovers(), 0);
     // The same target twice is refused before anything is written.
     assert!(write_files_atomically(&[(pa, "x"), (pa, "y")], &|f, t| std::fs::rename(f, t)).is_err());
     assert_eq!(std::fs::read_to_string(&a).unwrap(), "old A");
