@@ -1048,7 +1048,7 @@ impl PhotocraftApp {
         // (#5667): History reads the transform (or Place Embedded), then New Layer. Only for a
         // command that can run; a transform refused or still being applied keeps the box open and
         // the command doesn't run.
-        if id.starts_with("layer.new.") && self.ui.transform.is_some() {
+        if photocraft_engine::PRECHECKED.contains(&id) && self.ui.transform.is_some() {
             // Bad params or a command that can't run leave the box as it is.
             self.session.precheck(id, &params).map_err(|e| e.to_string())?;
             transform_tool::commit(self);

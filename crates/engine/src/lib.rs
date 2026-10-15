@@ -421,6 +421,11 @@ pub struct CopiedStyle {
     pub mode: photocraft_color::ColorMode,
 }
 
+/// The commands whose [`Session::precheck`] is complete: it accepts exactly what `execute` does
+/// (Free Transform applies its box before these, and only when they will run).
+pub const PRECHECKED: &[&str] =
+    &["layer.new.layer", "layer.new.group", "layer.new.groupFromLayers", "layer.new.layerFromBackground", "layer.new.layerViaCopy", "layer.new.layerViaCut"];
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
@@ -663,19 +668,48 @@ impl Session {
     /// [`Self::execute`] requires (New Layer's fully), and it can run now. For a caller that does
     /// something first only when the command will go through: Free Transform applies its box
     /// before a new layer is made.
-    pub fn precheck(&self, id: &str, params: &Value) -> Result<()> {
+    ///
+    /// Complete for the commands in [`PRECHECKED`]: there it accepts exactly what `execute`
+    /// accepts (a test holds the two together). For others it checks only what they share.
+    pub fn precheck(&mut self, id: &str, params: &Value) -> Result<()> {
         let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
         crate::param_check::check(spec, params)?;
+        crate::filters::validate_params(id, params)?;
         if id == "layer.new.layer" {
             crate::new_layer::parse(params)?;
         }
-        match self.disabled_reason_with(id, params) {
-            Some(why) => Err(EngineError::Disabled(id.to_string(), why)),
-            None => Ok(()),
+        // A command that takes `"layer":id` fails on one the document doesn't have.
+        if spec.params.contains("\"layer\":id")
+            && let Some(l) = params.get("layer").filter(|v| !v.is_null())
+        {
+            let id_ok = l.as_u64().is_some_and(|l| self.active().is_some_and(|st| st.doc.layer(LayerId(l)).is_some()));
+            if !id_ok {
+                return Err(EngineError::BadParams { cmd: id.to_string(), msg: format!("no layer {l}") });
+            }
         }
+        self.admit(id, spec, params).map(|_| ())
+    }
+
+    /// What `dispatch` checks once the params are valid and a floating selection has dropped:
+    /// the precondition (on a named layer for commands that take one), a job running on the
+    /// document, a hidden target. The run params (the Channels panel's target filled in) when it
+    /// may run.
+    pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
+        let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
+        if let Err(why) = self.explicit_layer_enabled(spec, params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
+            return Err(EngineError::Disabled(id.to_string(), why));
+        }
+        if let Some(why) = self.job_conflict(id, spec.journal) {
+            return Err(EngineError::Disabled(id.to_string(), why));
+        }
+        // Painting on or moving a hidden layer is refused, as in Photoshop (#571).
+        if let Some(why) = hidden_target::refusal(self, id, params) {
+            return Err(EngineError::Other(why.into()));
+        }
+        Ok(run_params)
     }
 
     /// Is the command currently runnable? (drives menu enablement)
