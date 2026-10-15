@@ -533,7 +533,8 @@ pub struct Performance {
     /// vsync, so a stroke follows the pen about 50 ms sooner (the swap chain's wait, #1343). wgpu
     /// picks Immediate where the driver has it (most Vulkan and DX12 drivers on Windows and X11),
     /// so the canvas usually tears while it changes; Mailbox (no tearing) only where Immediate is
-    /// missing. Frames are capped at 240 fps. Off: vsync, smooth but late. Desktop only.
+    /// missing. Frames are capped at 240 fps. Off (the default): vsync, smooth but late. Desktop
+    /// only.
     pub low_latency_drawing: bool,
     /// Linux display server (applies at next launch; see [`LinuxDisplayServer`]).
     pub linux_display_server: LinuxDisplayServer,
@@ -566,7 +567,7 @@ impl Default for Performance {
             rendering_mode: None,
             gpu_backend: GpuBackend::Auto,
             low_resolution_previews: true,
-            low_latency_drawing: true,
+            low_latency_drawing: false,
             linux_display_server: LinuxDisplayServer::Auto,
             effect_cache_mb: 768,
             legacy_compositing: false,
