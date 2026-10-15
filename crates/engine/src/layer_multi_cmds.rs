@@ -1317,8 +1317,7 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
         // layers of different chains don't: the result, at the top one's slot, would clip the
         // lower chain's pixels to the upper chain's base.
         let base = crate::clip_group::base_of(doc, top_id);
-        merged.clipped = base.is_some()
-            && solo.layers.iter().all(|l| l.clipped && crate::clip_group::base_of(doc, l.id) == base);
+        merged.clipped = base.is_some() && solo.layers.iter().all(|l| l.clipped && crate::clip_group::base_of(doc, l.id) == base);
         *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers_uncropped(&solo, fmt);
         let mid = merged.id;
         // Hidden selected layers are discarded, as in Photoshop.
