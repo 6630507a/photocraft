@@ -2104,19 +2104,21 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
     // The bindings as a `.kys` file, or Photoshop's Summarize page: every bindable item (the
     // engine's commands, the shell's commands and the tools).
     let set_name = if prefs.shortcut_set.is_empty() { crate::shortcut_sets::DEFAULTS_NAME } else { prefs.shortcut_set.as_str() };
-    if let Some(target) = file_target(cmd, p.get("exportKys"))? {
+    // Both targets are resolved and their texts made before anything is written, and a path that
+    // can't be written is refused before either file is: a bad export changes nothing.
+    let kys_target = file_target(cmd, p.get("exportKys"))?;
+    let html_target = file_target(cmd, p.get("summarize"))?;
+    let mut files: Vec<(&str, String, String)> = Vec::new();
+    if let Some(target) = kys_target {
         let entries: Vec<crate::kys::Entry> =
             crate::shortcut_sets::bound(prefs).into_iter().map(|b| crate::kys::Entry { id: b.id, label: b.label, tool: b.tool, keys: b.keys }).collect();
         let text = crate::kys::write(set_name, &entries);
         match target {
-            Some(path) => {
-                write_text_file(&path, &text).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-                out["kysPath"] = json!(path);
-            }
+            Some(path) => files.push(("kysPath", path, text)),
             None => out["kys"] = json!(text),
         }
     }
-    if let Some(target) = file_target(cmd, p.get("summarize"))? {
+    if let Some(target) = html_target {
         let v = p.get("summarize").cloned().unwrap_or(Value::Null);
         let mac = v.get("mac").and_then(Value::as_bool).unwrap_or(cfg!(target_os = "macos"));
         let mut sections: Vec<crate::shortcut_sets::Section> = Vec::new();
@@ -2128,12 +2130,24 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let html = crate::shortcut_sets::summarize(set_name, &sections, mac);
         match target {
-            Some(path) => {
-                write_text_file(&path, &html).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
-                out["htmlPath"] = json!(path);
-            }
+            Some(path) => files.push(("htmlPath", path, html)),
             None => out["html"] = json!(html),
         }
+    }
+    for (_, path, _) in &files {
+        writable(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+    }
+    let mut written: Vec<&str> = Vec::new();
+    for (key, path, text) in &files {
+        if let Err(e) = write_text_file(path, text) {
+            // A later file failed: take back the ones written before it.
+            for done in written {
+                let _ = remove_file(done);
+            }
+            return Err(bad(cmd, format!("{path}: {e}")));
+        }
+        written.push(path);
+        out[*key] = json!(path);
     }
     if changed {
         s.edit_prefs(|p| *p = next);
@@ -2177,6 +2191,34 @@ fn read_text_file(_: &str, _: usize) -> std::result::Result<String, String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn write_text_file(path: &str, text: &str) -> std::result::Result<(), String> {
     std::fs::write(path, text).map_err(|e| e.to_string())
+}
+
+/// Whether `path` can be written: not a folder, in a folder that exists.
+#[cfg(not(target_arch = "wasm32"))]
+fn writable(path: &str) -> std::result::Result<(), String> {
+    let p = std::path::Path::new(path);
+    if p.is_dir() {
+        return Err("is a folder".into());
+    }
+    match p.parent().filter(|d| !d.as_os_str().is_empty()) {
+        Some(d) if !d.is_dir() => Err("its folder doesn't exist".into()),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn writable(_: &str) -> std::result::Result<(), String> {
+    Err("paths can't be written on the web; omit `path` to get the text back".into())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn remove_file(path: &str) -> std::io::Result<()> {
+    std::fs::remove_file(path)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn remove_file(_: &str) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -101,11 +101,16 @@ fn sets_read_and_write_files_and_export_everything() {
         json!({"set": {"edit.copy": "F10"}, "exportKys": {"path": dir.join("no").join("such").join("x.kys").to_str().unwrap()}}),
         json!({"set": {"edit.copy": "F10"}, "summarize": 7}),
         json!({"set": {"edit.copy": "F10"}, "saveSet": "Other", "summarize": {"path": dir.join("no").join("x.html").to_str().unwrap()}}),
+        // A good .kys path with a bad summarize: neither file is written.
+        json!({"set": {"edit.copy": "F10"}, "exportKys": {"path": dir.join("both.kys").to_str().unwrap()}, "summarize": {"path": dir.join("no").join("x.html").to_str().unwrap()}}),
+        json!({"exportKys": {"path": dir.join("both.kys").to_str().unwrap()}, "summarize": 7}),
+        json!({"exportKys": {"path": dir.join("both.kys").to_str().unwrap()}, "summarize": {"path": dir.to_str().unwrap()}}),
     ] {
         assert!(s.execute("edit.keyboardShortcuts", p.clone()).is_err(), "{p}");
         let r = ks(&mut s, json!({}));
         assert_eq!(r["overrides"], before, "{p}");
         assert!(r["sets"].get("Other").is_none(), "{p}: {r}");
+        assert!(!dir.join("both.kys").exists(), "{p}: no file written");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
