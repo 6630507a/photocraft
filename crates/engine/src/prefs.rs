@@ -2137,27 +2137,9 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
     for (_, path, _) in &files {
         writable(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     }
-    // Each file is written next to its target first and moved into place only once every one
-    // is written, so a failure leaves the user's existing files as they were.
-    let mut staged: Vec<String> = Vec::new();
-    for (_, path, text) in &files {
-        let tmp = format!("{path}.photocraft-tmp");
-        if let Err(e) = write_text_file(&tmp, text) {
-            let _ = remove_file(&tmp);
-            for t in &staged {
-                let _ = remove_file(t);
-            }
-            return Err(bad(cmd, format!("{path}: {e}")));
-        }
-        staged.push(tmp);
-    }
-    for ((key, path, _), tmp) in files.iter().zip(&staged) {
-        if let Err(e) = rename_file(tmp, path) {
-            for t in &staged {
-                let _ = remove_file(t);
-            }
-            return Err(bad(cmd, format!("{path}: {e}")));
-        }
+    let list: Vec<(&str, &str)> = files.iter().map(|(_, path, text)| (path.as_str(), text.as_str())).collect();
+    write_files_atomically(&list, &rename_path).map_err(|e| bad(cmd, e))?;
+    for (key, path, _) in &files {
         out[*key] = json!(path);
     }
     if changed {
@@ -2199,11 +2181,6 @@ fn read_text_file(_: &str, _: usize) -> std::result::Result<String, String> {
     Err("paths can't be read on the web; pass the file's text instead".into())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn write_text_file(path: &str, text: &str) -> std::result::Result<(), String> {
-    std::fs::write(path, text).map_err(|e| e.to_string())
-}
-
 /// Whether `path` can be written: not a folder, in a folder that exists.
 #[cfg(not(target_arch = "wasm32"))]
 fn writable(path: &str) -> std::result::Result<(), String> {
@@ -2223,29 +2200,129 @@ fn writable(_: &str) -> std::result::Result<(), String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn remove_file(path: &str) -> std::io::Result<()> {
-    std::fs::remove_file(path)
+fn rename_path(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::rename(from, to)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn remove_file(_: &str) -> std::io::Result<()> {
+fn rename_path(_: &std::path::Path, _: &std::path::Path) -> std::io::Result<()> {
+    Err(std::io::Error::other("paths can't be written on the web"))
+}
+
+/// Where `path` points, for telling whether two targets are one file: its folder resolved, its
+/// name compared without case where the file system ignores it.
+#[cfg(not(target_arch = "wasm32"))]
+fn path_key(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    let dir = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let key = dir.join(p.file_name().unwrap_or_default()).to_string_lossy().into_owned();
+    if cfg!(any(target_os = "windows", target_os = "macos")) { key.to_lowercase() } else { key }
+}
+
+/// A new, empty file beside `path` with a name nothing else uses (`create_new`), for staging
+/// (`kind` "tmp") or a backup ("bak").
+#[cfg(not(target_arch = "wasm32"))]
+fn sibling(path: &str, kind: &str) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    for n in 0..1000u32 {
+        let p = std::path::PathBuf::from(format!("{path}.{}-{n}.photocraft-{kind}", std::process::id()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+            Ok(f) => return Ok((p, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other("no free name beside it"))
+}
+
+/// Write `files` ((path, text)) all or nothing. Each text is staged in a new file beside its
+/// target; once every one is written, each existing target is moved aside to a backup and the
+/// staged file moved in. Any failure moves the backups back and removes what was staged, so the
+/// user's files end as they began; on success the backups go. Two targets naming one file are
+/// refused. `rename` is `std::fs::rename` (a test fails it on purpose).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn write_files_atomically(
+    files: &[(&str, &str)],
+    rename: &dyn Fn(&std::path::Path, &std::path::Path) -> std::io::Result<()>,
+) -> std::result::Result<(), String> {
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    for (i, (a, _)) in files.iter().enumerate() {
+        if files.iter().skip(i + 1).any(|(b, _)| path_key(a) == path_key(b)) {
+            return Err(format!("{a}: two exports to the same file"));
+        }
+    }
+    let mut staged: Vec<PathBuf> = Vec::new();
+    let drop_all = |paths: &[PathBuf]| {
+        for p in paths {
+            let _ = std::fs::remove_file(p);
+        }
+    };
+    for (path, text) in files {
+        let (tmp, mut f) = match sibling(path, "tmp") {
+            Ok(v) => v,
+            Err(e) => {
+                drop_all(&staged);
+                return Err(format!("{path}: {e}"));
+            }
+        };
+        staged.push(tmp);
+        if let Err(e) = f.write_all(text.as_bytes()).and_then(|()| f.sync_all()) {
+            drop_all(&staged);
+            return Err(format!("{path}: {e}"));
+        }
+    }
+    // (target, its backup) of each file moved in so far.
+    let mut moved: Vec<(&Path, Option<PathBuf>)> = Vec::new();
+    let undo = |moved: &[(&Path, Option<PathBuf>)]| {
+        for (target, backup) in moved.iter().rev() {
+            let _ = std::fs::remove_file(target);
+            if let Some(b) = backup {
+                let _ = rename(b, target);
+            }
+        }
+    };
+    for ((path, _), tmp) in files.iter().zip(&staged) {
+        let target = Path::new(*path);
+        let backup = if target.exists() {
+            match sibling(path, "bak").and_then(|(b, f)| {
+                drop(f);
+                rename(target, &b).map(|()| b)
+            }) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    undo(&moved);
+                    drop_all(&staged);
+                    return Err(format!("{path}: {e}"));
+                }
+            }
+        } else {
+            None
+        };
+        if let Err(e) = rename(tmp, target) {
+            if let Some(b) = &backup {
+                let _ = rename(b, target);
+            }
+            undo(&moved);
+            drop_all(&staged);
+            return Err(format!("{path}: {e}"));
+        }
+        moved.push((target, backup));
+    }
+    for (_, backup) in moved {
+        if let Some(b) = backup {
+            let _ = std::fs::remove_file(b);
+        }
+    }
     Ok(())
 }
 
-/// Move a staged file over its target (replacing it).
-#[cfg(not(target_arch = "wasm32"))]
-fn rename_file(from: &str, to: &str) -> std::result::Result<(), String> {
-    std::fs::rename(from, to).map_err(|e| e.to_string())
-}
-
 #[cfg(target_arch = "wasm32")]
-fn rename_file(_: &str, _: &str) -> std::result::Result<(), String> {
-    Err("paths can't be written on the web; omit `path` to get the text back".into())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn write_text_file(_: &str, _: &str) -> std::result::Result<(), String> {
-    Err("paths can't be written on the web; omit `path` to get the text back".into())
+pub(crate) fn write_files_atomically(
+    files: &[(&str, &str)],
+    _: &dyn Fn(&std::path::Path, &std::path::Path) -> std::io::Result<()>,
+) -> std::result::Result<(), String> {
+    if files.is_empty() { Ok(()) } else { Err("paths can't be written on the web; omit `path` to get the text back".into()) }
 }
 
 /// Edit › Menus: hide/show items and give them colours.
