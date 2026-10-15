@@ -303,6 +303,27 @@ impl GpuCanvas {
         Some((c.resident_bytes(), c.fx_cache_bytes().saturating_add(usize::try_from(c.composite_cache_bytes()).unwrap_or(usize::MAX))))
     }
 
+    /// Whether the adapter has memory of its own (a discrete card): the document's pixels and
+    /// History don't share it ([`memory_budget`]).
+    pub fn dedicated_memory(&self) -> bool {
+        self.rs.adapter.get_info().device_type == wgpu::DeviceType::DiscreteGpu
+    }
+
+    /// Whether `doc`'s layers fit the budget as it now stands, measured without a refresh (a GPU
+    /// Memory change shows in the status bar at once). `None` before the compositor exists.
+    pub fn measure_fit(&self, doc: &photocraft_doc::Document) -> Option<LayerFit> {
+        let mut r = self.rs.renderer.write();
+        let res = r.callback_resources.get_mut::<Resources>()?;
+        let budget = res.compositor_budget;
+        let comp = res.compositor.as_mut()?;
+        if let Some(b) = budget {
+            comp.set_memory_budget(b);
+        }
+        let fit = LayerFit { doc: doc.id.0, needed: comp.working_set(doc, doc.bounds()), budget: comp.resident_budget() };
+        res.layer_fit = Some(fit);
+        Some(fit)
+    }
+
     /// Whether the layers of the last full (or large) refresh fit the GPU memory budget, and by
     /// how much (`None` before the first one).
     pub fn layer_fit(&self) -> Option<LayerFit> {

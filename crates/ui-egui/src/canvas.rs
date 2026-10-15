@@ -1615,7 +1615,13 @@ fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, visible:
         grid: None,
     });
     let present = cache.on_gpu && gpu.has(id.0, size);
-    if present && cache.revision == revision && cache.preview_key == preview_key {
+    let current = cache.revision == revision && cache.preview_key == preview_key;
+    // GPU Memory or Memory Usage changed with nothing to redraw: the new budget, and whether the
+    // layers fit it, show at once (the status bar's GPU Memory Full).
+    if present && app.perf.gpu_budget_allowance != budget_allowance(app) {
+        gpu_budget(app, &gpu, idx, false, visible);
+    }
+    if present && current {
         // An adjustment preview composited where the view was: catch up where it moved to.
         if let Some(r) = crate::adjust_preview::uncovered(app, id, raw_key, visible) {
             let r = gpu.refresh(id.0, &doc, Some(r), display.as_deref());
@@ -1680,9 +1686,9 @@ fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, visible:
 /// structural change, not per brush dab) and whenever either preference changes.
 fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: usize, partial: bool, visible: DRect) {
     gpu.set_focus(Some(visible));
-    let performance = &app.session.prefs().performance;
-    let allowance = (u64::from(performance.memory_usage_mb).saturating_mul(1 << 20), u64::from(performance.gpu_memory_mb).saturating_mul(1 << 20));
-    if partial && app.perf.gpu_budget_allowance == allowance && gpu.memory_budget().is_some() {
+    let allowance = budget_allowance(app);
+    let changed = app.perf.gpu_budget_allowance != allowance;
+    if partial && !changed && gpu.memory_budget().is_some() {
         return;
     }
     let Some(st) = app.session.documents().get(idx) else { return };
@@ -1691,6 +1697,15 @@ fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: 
     gpu.set_memory_budget(budget);
     app.perf.gpu_budget_mb = budget >> 20;
     app.perf.gpu_budget_allowance = allowance;
+    if changed && let Some(fit) = gpu.measure_fit(&st.doc) {
+        app.perf.gpu_layer_fit = Some(fit);
+    }
+}
+
+/// Memory Usage and GPU Memory (Preferences › Performance), in bytes.
+fn budget_allowance(app: &PhotocraftApp) -> (u64, u64) {
+    let performance = &app.session.prefs().performance;
+    (u64::from(performance.memory_usage_mb).saturating_mul(1 << 20), u64::from(performance.gpu_memory_mb).saturating_mul(1 << 20))
 }
 
 /// Live preview for an open filter dialog: run the filter on the proxy and upload it. With
