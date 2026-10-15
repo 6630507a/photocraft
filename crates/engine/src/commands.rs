@@ -799,7 +799,12 @@ fn build() -> Vec<CommandSpec> {
                             l.fill_opacity = v;
                         }
                         if let Some(v) = p.get("blend").and_then(Value::as_str) {
-                            l.blend = blend_from_str(v).ok_or_else(|| bad("layer.setProps", format!("unknown blend mode `{v}`")))?;
+                            let b = blend_from_str(v).ok_or_else(|| bad("layer.setProps", format!("unknown blend mode `{v}`")))?;
+                            // Pass Through is a group's mode only, as in Photoshop.
+                            if b == photocraft_color::BlendMode::PassThrough && !l.is_group() {
+                                return Err(bad("layer.setProps", format!("Pass Through applies to groups only; layer {} isn't one", l.id.0)));
+                            }
+                            l.blend = b;
                         }
                         if let Some(v) = p.get("clipped").and_then(Value::as_bool) {
                             l.clipped = v;

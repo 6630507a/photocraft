@@ -2160,13 +2160,17 @@ fn hsb_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// any is set, and locks all otherwise. Toggling only "lock all" would leave the Background's
 /// transparency lock (still showing as locked), and a second click would lock its pixels,
 /// shutting out the Eraser and every other paint tool (#76).
-fn simple_lock_toggle(background: bool, l: &Layer) -> (String, Value) {
+/// The Basic layout's lock toggle: the active layer's state decides, and every target follows it
+/// (`targets`: `{"layer": id}` or `{"layers": [ids]}`).
+fn simple_lock_toggle(background: bool, l: &Layer, targets: &Value) -> (String, Value) {
     if background {
         return ("layer.new.layerFromBackground".into(), json!({}));
     }
     let locks =
         if l.locks.any() { json!({"transparency": false, "pixels": false, "position": false, "artboard": false, "all": false}) } else { json!({"all": true}) };
-    ("layer.setProps".into(), json!({"layer": l.id.0, "locks": locks}))
+    let mut p = targets.clone();
+    p["locks"] = locks;
+    ("layer.setProps".into(), p)
 }
 
 /// The Layers panel's blend modes: Photoshop's, plus the layer's own Paint.NET mode when it has one
@@ -2232,15 +2236,16 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.add_space(4.0);
     }
     if let Some(l) = active_layer {
-        // Photoshop greys blend mode, Opacity and Fill for the Background layer.
-        let bg = crate::doc_props_ui::is_background(&doc, l);
         // With several layers selected, blend mode, Opacity, Fill and the locks change every one
         // of them, as in Photoshop; the controls show the active layer's values.
-        let targets = if selection.len() > 1 && selection.contains(&l.id) {
-            json!({"layers": selection.iter().map(|id| id.0).collect::<Vec<_>>()})
-        } else {
-            json!({"layer": l.id.0})
-        };
+        let ids: Vec<LayerId> = if selection.len() > 1 && selection.contains(&l.id) { selection.clone() } else { vec![l.id] };
+        let targets = if ids.len() > 1 { json!({"layers": ids.iter().map(|id| id.0).collect::<Vec<_>>()}) } else { json!({"layer": l.id.0}) };
+        // Photoshop greys blend mode, Opacity and Fill for the Background layer, also when it is
+        // one of several selected (changing them would turn it into Layer 0).
+        let bg =
+            crate::doc_props_ui::is_background(&doc, l) || ids.iter().any(|id| doc.layer(*id).is_some_and(|x| crate::doc_props_ui::is_background(&doc, x)));
+        // Pass Through is a group's mode: offered only when every target is a group.
+        let all_groups = ids.iter().all(|id| doc.layer(*id).is_some_and(|x| x.is_group()));
         ui.horizontal(|ui| {
             ui.add_enabled_ui(!bg, |ui| {
                 let mut m = l.blend;
@@ -2250,7 +2255,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let opacity_label = if t.pro { tl!("Opacity:") } else { tl!("Opacity") };
                 let (blend_width, show_opacity_label) =
                     opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
-                let (chosen, hovered) = widgets::dropdown_wheel_hovered(ui, "blend", &mut m, &blend_options(l.is_group(), l.blend), blend_width);
+                let (chosen, hovered) = widgets::dropdown_wheel_hovered(ui, "blend", &mut m, &blend_options(all_groups, l.blend), blend_width);
                 // One step per choice: a click, an arrow key or each wheel notch (#1747).
                 for m in &chosen {
                     let mut p = targets.clone();
@@ -2258,7 +2263,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     actions.push(("layer.setProps".into(), p));
                 }
                 // Hovering a mode previews it on the canvas (#970).
-                crate::blend_preview::hover(app, l.id, hovered.filter(|_| chosen.is_empty()));
+                crate::blend_preview::hover(app, &ids, hovered.filter(|_| chosen.is_empty()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mut o = l.opacity * 100.0;
                     let field = widgets::popup_value_field(ui, opacity_label, &mut o, 0.0..=100.0, "%", LAYER_PCT_W);
@@ -2315,7 +2320,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if !t.pro {
                 let locked = l.locks.any();
                 if icons::button(ui, if locked { "lock" } else { "lock-open" }, 22.0, locked, tl!("Lock layer")).clicked() {
-                    actions.push(simple_lock_toggle(bg, l));
+                    actions.push(simple_lock_toggle(crate::doc_props_ui::is_background(&doc, l), l, &targets));
                 }
             }
             ui.add_enabled_ui(!bg, |ui| {
@@ -2889,7 +2894,7 @@ fn layer_row(
     if let Some(&(_, lock)) = indicators.iter().find(|(k, _)| *k == crate::layer_row_ui::Indicator::Lock)
         && ui.interact(lock, ui.id().with(("row-lock", l.id.0)), Sense::click()).clicked()
     {
-        actions.push(simple_lock_toggle(doc.is_background(l.id), l));
+        actions.push(simple_lock_toggle(doc.is_background(l.id), l, &json!({"layer": l.id.0})));
     }
     let name_color = if l.visible { t.text } else { t.text_faint };
     let font = if selected && !t.pro { theme::medium(13.0) } else { egui::FontId::proportional(if t.pro { 12.0 } else { 13.0 }) };
@@ -3151,6 +3156,8 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             let icon = match e.as_str() {
                 s if s.contains("Brush") || s.contains("Eraser") => "brush",
+                // The Layers panel's controls (layer.setProps).
+                "Opacity Change" | "Fill Opacity Change" | "Blending Change" => "layers",
                 s if s.contains("Layer") => "layers",
                 s if s.contains("Select") || s.contains("Marquee") || s.contains("Deselect") || s.contains("Lasso") => "square-dashed",
                 s if s.contains("Fill") => "paint-bucket",
@@ -5004,7 +5011,7 @@ mod lock_tests {
     fn click_lock(app: &mut PhotocraftApp) {
         let st = app.session.active().unwrap();
         let l = st.active_layer.and_then(|id| st.doc.layer(id)).unwrap();
-        let (cmd, p) = simple_lock_toggle(crate::doc_props_ui::is_background(&st.doc, l), l);
+        let (cmd, p) = simple_lock_toggle(crate::doc_props_ui::is_background(&st.doc, l), l, &json!({"layer": l.id.0}));
         app.run(&cmd, p).unwrap();
     }
 

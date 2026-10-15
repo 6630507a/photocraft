@@ -56,3 +56,17 @@ fn bad_layer_lists_change_nothing() {
         assert_eq!(s.active().unwrap().doc.layers, before.layers, "{p}");
     }
 }
+
+#[test]
+fn pass_through_is_for_groups_only() {
+    let (mut s, ids) = doc();
+    let g = s.execute("layer.new.group", json!({})).unwrap()["layer"].as_u64().unwrap();
+    // A pixel layer, alone or with a group, can't take Pass Through; nothing changes.
+    assert!(s.execute("layer.setProps", json!({"layer": ids[0], "blend": "Pass Through"})).is_err());
+    let before = (layer(&s, ids[0]).blend, layer(&s, g).blend);
+    assert!(s.execute("layer.setProps", json!({"layers": [g, ids[0]], "blend": "Pass Through"})).is_err());
+    assert_eq!((layer(&s, ids[0]).blend, layer(&s, g).blend), before);
+    s.execute("layer.setProps", json!({"layers": [g], "blend": "Normal"})).unwrap();
+    s.execute("layer.setProps", json!({"layer": g, "blend": "Pass Through"})).unwrap();
+    assert_eq!(layer(&s, g).blend, photocraft_color::BlendMode::PassThrough);
+}
