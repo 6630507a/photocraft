@@ -47,6 +47,9 @@ fn params() -> Vec<Value> {
         json!({"name": "ok"}),
         json!({"color": "chartreuse"}),
         json!({"layer": 999_999}),
+        json!({"layer": "Layer 1"}),
+        json!({"layer": "no such layer"}),
+        json!({"layer": true}),
         json!({"ifPresent": true}),
     ]
 }

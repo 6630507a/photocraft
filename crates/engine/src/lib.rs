@@ -422,9 +422,10 @@ pub struct CopiedStyle {
 }
 
 /// The commands whose [`Session::precheck`] is complete: it accepts exactly what `execute` does
-/// (Free Transform applies its box before these, and only when they will run).
-pub const PRECHECKED: &[&str] =
-    &["layer.new.layer", "layer.new.group", "layer.new.groupFromLayers", "layer.new.layerFromBackground", "layer.new.layerViaCopy", "layer.new.layerViaCut"];
+/// (Free Transform applies its box before these, and only when they will run). Layer via Copy and
+/// Cut aren't: whether they have anything to copy (a selection over transparent pixels, a group
+/// or fill layer) is known only when they run.
+pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.new.groupFromLayers", "layer.new.layerFromBackground"];
 
 #[derive(Default)]
 pub struct Session {
@@ -681,14 +682,13 @@ impl Session {
         if id == "layer.new.layer" {
             crate::new_layer::parse(params)?;
         }
-        // A command that takes `"layer":id` fails on one the document doesn't have.
+        // A command that takes `"layer"` (an id or a name, as it resolves it) fails on one the
+        // document doesn't have.
         if spec.params.contains("\"layer\":id")
-            && let Some(l) = params.get("layer").filter(|v| !v.is_null())
+            && let Some(l) = commands::explicit_layer(self, params)?
+            && self.active().is_none_or(|st| st.doc.layer(l).is_none())
         {
-            let id_ok = l.as_u64().is_some_and(|l| self.active().is_some_and(|st| st.doc.layer(LayerId(l)).is_some()));
-            if !id_ok {
-                return Err(EngineError::BadParams { cmd: id.to_string(), msg: format!("no layer {l}") });
-            }
+            return Err(EngineError::BadParams { cmd: id.to_string(), msg: format!("no layer {}", l.0) });
         }
         self.admit(id, spec, params).map(|_| ())
     }
