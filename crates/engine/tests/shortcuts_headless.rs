@@ -112,5 +112,16 @@ fn sets_read_and_write_files_and_export_everything() {
         assert!(r["sets"].get("Other").is_none(), "{p}: {r}");
         assert!(!dir.join("both.kys").exists(), "{p}: no file written");
     }
+    // A second file that passes the checks but can't be written (a NUL in its name): the user's
+    // existing first file is left exactly as it was, and no staged file stays behind.
+    let mine = dir.join("existing.kys");
+    std::fs::write(&mine, "the user's own file").unwrap();
+    let html = format!("{}/a\u{0}.html", dir.to_str().unwrap());
+    let p = json!({"exportKys": {"path": mine.to_str().unwrap()}, "summarize": {"path": html}});
+    assert!(s.execute("edit.keyboardShortcuts", p.clone()).is_err(), "{p}");
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "the user's own file");
+    let left: Vec<_> =
+        std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name()).filter(|n| n.to_string_lossy().contains("photocraft-tmp")).collect();
+    assert!(left.is_empty(), "{left:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

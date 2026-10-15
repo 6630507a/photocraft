@@ -2137,16 +2137,27 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
     for (_, path, _) in &files {
         writable(path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     }
-    let mut written: Vec<&str> = Vec::new();
-    for (key, path, text) in &files {
-        if let Err(e) = write_text_file(path, text) {
-            // A later file failed: take back the ones written before it.
-            for done in written {
-                let _ = remove_file(done);
+    // Each file is written next to its target first and moved into place only once every one
+    // is written, so a failure leaves the user's existing files as they were.
+    let mut staged: Vec<String> = Vec::new();
+    for (_, path, text) in &files {
+        let tmp = format!("{path}.photocraft-tmp");
+        if let Err(e) = write_text_file(&tmp, text) {
+            let _ = remove_file(&tmp);
+            for t in &staged {
+                let _ = remove_file(t);
             }
             return Err(bad(cmd, format!("{path}: {e}")));
         }
-        written.push(path);
+        staged.push(tmp);
+    }
+    for ((key, path, _), tmp) in files.iter().zip(&staged) {
+        if let Err(e) = rename_file(tmp, path) {
+            for t in &staged {
+                let _ = remove_file(t);
+            }
+            return Err(bad(cmd, format!("{path}: {e}")));
+        }
         out[*key] = json!(path);
     }
     if changed {
@@ -2219,6 +2230,17 @@ fn remove_file(path: &str) -> std::io::Result<()> {
 #[cfg(target_arch = "wasm32")]
 fn remove_file(_: &str) -> std::io::Result<()> {
     Ok(())
+}
+
+/// Move a staged file over its target (replacing it).
+#[cfg(not(target_arch = "wasm32"))]
+fn rename_file(from: &str, to: &str) -> std::result::Result<(), String> {
+    std::fs::rename(from, to).map_err(|e| e.to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn rename_file(_: &str, _: &str) -> std::result::Result<(), String> {
+    Err("paths can't be written on the web; omit `path` to get the text back".into())
 }
 
 #[cfg(target_arch = "wasm32")]
