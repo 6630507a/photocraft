@@ -58,3 +58,21 @@ fn the_basic_lock_toggle_locks_every_selected_layer() {
     let locked = |id: u64| st.doc.layer(photocraft_doc::LayerId(id)).unwrap().locks.all;
     assert!(locked(a) && locked(b), "both selected layers lock");
 }
+
+/// The Background, selected with other layers, is left out of their change (Opacity here)
+/// until Photoshop's behaviour is confirmed (#5856): it stays the Background.
+#[test]
+fn a_selected_background_is_left_out_of_a_several_layer_change() {
+    let mut h = app();
+    let st = h.state().session.active().unwrap();
+    let (bg, top) = (st.doc.layers[0].id.0, st.active_layer.unwrap().0);
+    h.state_mut().run("layer.select", json!({"layer": bg})).unwrap();
+    h.state_mut().run("layer.select", json!({"layer": top, "mode": "add"})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Lock all").click();
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    let l = |id: u64| st.doc.layer(photocraft_doc::LayerId(id)).unwrap().clone();
+    assert!(l(top).locks.all, "the layer locks");
+    assert!(st.doc.is_background(photocraft_doc::LayerId(bg)) && !l(bg).locks.all, "the Background is left as it was");
+}

@@ -2238,7 +2238,13 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(l) = active_layer {
         // With several layers selected, blend mode, Opacity, Fill and the locks change every one
         // of them, as in Photoshop; the controls show the active layer's values.
-        let ids: Vec<LayerId> = if selection.len() > 1 && selection.contains(&l.id) { selection.clone() } else { vec![l.id] };
+        // The Background stays out of a several-layer change until Photoshop's behaviour is
+        // confirmed (#5856): Opacity, Fill or a blend mode would turn it into Layer 0.
+        let ids: Vec<LayerId> = if selection.len() > 1 && selection.contains(&l.id) {
+            selection.iter().copied().filter(|id| *id == l.id || !doc.layer(*id).is_some_and(|x| crate::doc_props_ui::is_background(&doc, x))).collect()
+        } else {
+            vec![l.id]
+        };
         let targets = if ids.len() > 1 { json!({"layers": ids.iter().map(|id| id.0).collect::<Vec<_>>()}) } else { json!({"layer": l.id.0}) };
         // Photoshop greys blend mode, Opacity and Fill for the Background layer. (With the
         // Background among several selected, what Photoshop does awaits a check: #5856.)
