@@ -263,7 +263,8 @@ fn can_align(s: &Session) -> std::result::Result<(), String> {
     let d = doc_state(s)?;
     match d.selected_layers().len() {
         0 => Err("no layer selected".into()),
-        // Photoshop aligns a single layer to the canvas (or to an active selection); 2+ align to each other.
+        // Photoshop aligns to an active selection however many layers are selected; without one,
+        // a single layer aligns to the canvas and 2+ align to each other.
         _ => Ok(()),
     }
 }
@@ -1432,7 +1433,7 @@ pub fn specs() -> Vec<CommandSpec> {
             CommandSpec { id: $id, label: $label, menu: $menu, shortcut: $sc, params: $params, enabled: $enabled, journal: true, run: $run }
         };
     }
-    const ALIGN: &str = r##"{"to":"auto|layers|selection|canvas"="auto"} (auto: the selection bounds with one layer and an active selection, else the selected layers' bounds)"##;
+    const ALIGN: &str = r##"{"to":"auto|layers|selection|canvas"="auto"} (auto: the active selection's bounds when there is one, however many layers are selected; else one layer aligns to the canvas and several to their combined bounds)"##;
     vec![
         spec!("select.allLayers", "All Layers", &["Select"], Some("Cmd+Alt+A"), "{}", has_doc, |s, _| select_all_layers(s)),
         spec!("select.deselectLayers", "Deselect Layers", &["Select"], None, "{}", has_doc, |s, _| {

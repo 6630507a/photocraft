@@ -913,10 +913,15 @@ pub fn specs() -> Vec<CommandSpec> {
                     // Blend If's Gray range carries over to any mode; its channel ranges and the
                     // channel restrictions only to the mode they were set in.
                     let same_mode = style.mode == mode;
-                    let mut blend_if = style.blend_if.clone();
-                    if !same_mode {
-                        blend_if.ranges.truncate(1);
-                    }
+                    let blend_if = if same_mode {
+                        style.blend_if.clone()
+                    } else {
+                        // Through `set`, which keeps the normalised form (no trailing full
+                        // entries), so a full Gray range pastes as the default.
+                        let mut gray = photocraft_doc::BlendIf::default();
+                        gray.set(0, style.blend_if.get(0));
+                        gray
+                    };
                     for id in ids {
                         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                         l.effects = fx.clone();

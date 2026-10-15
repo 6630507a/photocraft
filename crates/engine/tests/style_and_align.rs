@@ -41,6 +41,45 @@ fn paste_layer_style_carries_blend_if_and_channels() {
 }
 
 #[test]
+fn paste_layer_style_into_another_mode_keeps_blend_if_normalised() {
+    // A full Gray range and only a Red range: in CMYK nothing is left, so it is the default
+    // (which compares equal, so the paste isn't seen as a Blend If change).
+    let mut s = Session::new();
+    let (a, _) = new_doc(&mut s, "rgb");
+    s.execute("layer.layerStyle.blendingOptions", json!({"layer": a, "blendIf": [{"channel": "red", "thisLayer": [10, 200]}]})).unwrap();
+    s.execute("layer.layerStyle.copyLayerStyle", json!({"layer": a})).unwrap();
+    let (c, _) = new_doc(&mut s, "cmyk");
+    s.execute("layer.layerStyle.pasteLayerStyle", json!({"layer": c})).unwrap();
+    assert_eq!(layer(&s, c).blend_if, photocraft_doc::BlendIf::default());
+}
+
+#[test]
+fn paste_layer_style_on_several_layers_is_one_undo_step() {
+    // 16-bit, onto a pixel layer and a group: one History step, and one Undo restores both.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 64, "depth": 16, "background": "white"})).unwrap();
+    let a = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerStyle.blendingOptions", json!({"layer": a, "blendIf": [{"channel": "gray", "underlying": [0, 128]}]})).unwrap();
+    s.execute("layer.setProps", json!({"layer": a, "fill": 0.5, "blend": "multiply"})).unwrap();
+    s.execute("layer.layerStyle.copyLayerStyle", json!({"layer": a})).unwrap();
+    let b = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let g = s.execute("layer.new.group", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let before = (layer(&s, b), layer(&s, g));
+    s.execute("layer.select", json!({"layer": b})).unwrap();
+    s.execute("layer.select", json!({"layer": g, "mode": "add"})).unwrap();
+    s.execute("layer.layerStyle.pasteLayerStyle", json!({})).unwrap();
+    let la = layer(&s, a);
+    for id in [b, g] {
+        let l = layer(&s, id);
+        assert_eq!((l.blend_if.clone(), l.fill_opacity, l.blend), (la.blend_if.clone(), la.fill_opacity, la.blend), "layer {id}");
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    let after = (layer(&s, b), layer(&s, g));
+    assert_eq!((after.0.blend_if, after.0.blend, after.1.blend_if, after.1.blend), (before.0.blend_if, before.0.blend, before.1.blend_if, before.1.blend));
+    assert_eq!((after.0.fill_opacity, after.1.fill_opacity), (before.0.fill_opacity, before.1.fill_opacity));
+}
+
+#[test]
 fn several_layers_align_to_an_active_selection() {
     let mut s = Session::new();
     let (a, b) = new_doc(&mut s, "rgb");
