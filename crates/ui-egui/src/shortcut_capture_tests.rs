@@ -291,3 +291,58 @@ fn a_system_key_is_refused() {
     assert!(!crate::prefs_ui::reserved_shortcut("Cmd+Shift+F4"));
     assert!(!crate::prefs_ui::reserved_shortcut("garbage+"));
 }
+
+/// The conflict describes the bindings as the capture left them: Reset All, Use Default or
+/// Escape after it makes it stale, so Accept can't take a key nothing holds any more.
+#[test]
+fn a_conflict_goes_stale_when_the_bindings_change() {
+    for undo in ["Reset All to Defaults", "Use Default", "escape"] {
+        let (mut h, id) = dialog(1.0, "edit.cut", "");
+        capture_key(&mut h, id, Key::C, Modifiers::COMMAND);
+        assert!(field(&h, id, "conflict").is_object(), "{undo}");
+        if undo == "escape" {
+            h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("capture".into(), json!(true));
+            h.run_steps(2);
+            key(&mut h, Key::Escape, true, Modifiers::NONE);
+            h.run_steps(2);
+            key(&mut h, Key::Escape, false, Modifiers::NONE);
+            h.run_steps(2);
+        } else {
+            click(&mut h, undo);
+        }
+        assert!(field(&h, id, "conflict").is_null(), "{undo}: {}", field(&h, id, "conflict"));
+        assert!(h.query_by_label("Accept and Go to Conflict").is_none(), "{undo}");
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        if undo != "escape" {
+            assert_eq!(crate::shortcuts::effective_shortcut(h.state(), "edit.copy", Some("Cmd+C")).as_deref(), Some("Cmd+C"), "{undo}: Copy keeps ⌘C");
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn linux_reserves_its_own_system_keys() {
+    assert!(crate::prefs_ui::reserved_shortcut("Cmd+Alt+F2"));
+    assert!(!crate::prefs_ui::reserved_shortcut("Cmd+Escape"));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_reserves_its_own_system_keys() {
+    assert!(crate::prefs_ui::reserved_shortcut("Cmd+Escape"));
+    assert!(!crate::prefs_ui::reserved_shortcut("Cmd+Alt+F2"));
+}
+
+/// A key two commands hold (Cut's ⌘X, given to Copy too): Accept takes it from both.
+#[test]
+fn accept_takes_the_key_from_every_command_holding_it() {
+    let (mut h, id) = dialog(1.0, "edit.paste", "");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), json!({"edit.copy": "Cmd+X"}));
+    h.run_steps(2);
+    capture_key(&mut h, id, Key::X, Modifiers::COMMAND);
+    let holders = field(&h, id, "conflict")["holders"].clone();
+    assert!(holders.as_array().is_some_and(|a| a.len() == 2), "{holders}");
+    click(&mut h, "Accept and Go to Conflict");
+    let o = field(&h, id, "overrides");
+    assert_eq!((o["edit.cut"].clone(), o["edit.copy"].clone(), o["edit.paste"].clone()), (json!(""), json!(""), json!("Cmd+X")), "{o}");
+}

@@ -804,7 +804,14 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
     out
 }
 
-/// Text of a key press for the shortcut editor (`Cmd+Shift+K`), `None` for bare modifiers.
+/// A fingerprint of the bindings a shortcut conflict describes.
+fn conflict_state(overrides: &BTreeMap<String, String>, alternates: &BTreeMap<String, Vec<String>>, selected: &str, set: Option<&Value>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (overrides, alternates, selected, set.map(Value::to_string)).hash(&mut h);
+    h.finish()
+}
+
 /// Keys the system takes before the app sees them (switching apps, closing the window, force
 /// quit): Edit › Keyboard Shortcuts won't assign them, as Photoshop won't. `sc` is in our
 /// notation, where `Cmd` is Ctrl off the Mac.
@@ -812,12 +819,33 @@ pub fn reserved_shortcut(sc: &str) -> bool {
     let Some(n) = prefs::normalize_shortcut(sc) else { return false };
     let reserved: &[&str] = if cfg!(target_os = "macos") {
         &["Cmd+Tab", "Cmd+Shift+Tab", "Cmd+Alt+Escape", "Cmd+`"]
-    } else {
+    } else if cfg!(target_os = "windows") {
         &["Alt+Tab", "Alt+Shift+Tab", "Alt+F4", "Cmd+Alt+Delete", "Cmd+Escape", "Cmd+Shift+Escape"]
+    } else {
+        // Linux and the BSDs: window switching and closing, and the virtual consoles.
+        &[
+            "Alt+Tab",
+            "Alt+Shift+Tab",
+            "Alt+F4",
+            "Cmd+Alt+Delete",
+            "Cmd+Alt+F1",
+            "Cmd+Alt+F2",
+            "Cmd+Alt+F3",
+            "Cmd+Alt+F4",
+            "Cmd+Alt+F5",
+            "Cmd+Alt+F6",
+            "Cmd+Alt+F7",
+            "Cmd+Alt+F8",
+            "Cmd+Alt+F9",
+            "Cmd+Alt+F10",
+            "Cmd+Alt+F11",
+            "Cmd+Alt+F12",
+        ]
     };
     reserved.iter().filter_map(|r| prefs::normalize_shortcut(r)).any(|r| r == n)
 }
 
+/// Text of a key press for the shortcut editor (`Cmd+Shift+K`), `None` for bare modifiers.
 pub fn shortcut_text(key: egui::Key, m: egui::Modifiers) -> Option<String> {
     if is_modifier_key(key) {
         return None;
@@ -1755,6 +1783,7 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
             });
             if key == egui::Key::Escape {
                 capture = false;
+                conflict = None;
             } else if matches!(key, egui::Key::Backspace | egui::Key::Delete) && m.is_none() {
                 if capture_alt {
                     alt_overrides.insert(selected.clone(), Vec::new());
@@ -1792,6 +1821,8 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
                     conflict = Some(json!({
                         "shortcut": sc,
                         "with": first,
+                        // Every command holding the key: Accept takes it from all of them.
+                        "holders": clash_ids,
                         "command": selected,
                         "main": overrides.get(&selected),
                         "alternates": alt_overrides.get(&selected),
@@ -1962,6 +1993,12 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
     if !message.is_empty() {
         ui.label(RichText::new(&message).color(if message_warning { t.warning } else { t.text_dim }));
     }
+    // The conflict describes the bindings as the capture left them: any later change (Use
+    // Default, Delete, ×, Reset All, another command or set) makes it stale, and it goes.
+    let state = conflict_state(&overrides, &alt_overrides, &selected, f.get("activeSet"));
+    if conflict.as_ref().and_then(|c| c.get("state")).is_some_and(|s| s.as_u64() != Some(state)) {
+        conflict = None;
+    }
     if tab == 0
         && let Some(c) = conflict.clone()
     {
@@ -1969,14 +2006,17 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
             (c["shortcut"].as_str().unwrap_or_default(), c["with"].as_str().unwrap_or_default(), c["command"].as_str().unwrap_or_default());
         ui.horizontal(|ui| {
             if ui.button(tl!("Accept and Go to Conflict")).on_hover_text(tl!("Take the shortcut from the other command and select it")).clicked() {
-                let def = items.iter().find(|i| i.0 == with).and_then(|i| i.3.clone());
-                let cur = eff(&overrides, with, &def);
-                if cur.as_deref().and_then(prefs::normalize_shortcut).as_deref() == Some(key) {
-                    overrides.insert(with.to_string(), String::new());
-                }
-                let keys = eff_alts(&alt_overrides, with, eff(&overrides, with, &def).as_deref());
-                if keys.iter().any(|k| k == key) {
-                    alt_overrides.insert(with.to_string(), keys.into_iter().filter(|k| k != key).collect());
+                let holders: Vec<String> = serde_json::from_value(c["holders"].clone()).unwrap_or_else(|_| vec![with.to_string()]);
+                for holder in &holders {
+                    let def = items.iter().find(|i| i.0 == *holder).and_then(|i| i.3.clone());
+                    let cur = eff(&overrides, holder, &def);
+                    if cur.as_deref().and_then(prefs::normalize_shortcut).as_deref() == Some(key) {
+                        overrides.insert(holder.clone(), String::new());
+                    }
+                    let keys = eff_alts(&alt_overrides, holder, eff(&overrides, holder, &def).as_deref());
+                    if keys.iter().any(|k| k == key) {
+                        alt_overrides.insert(holder.clone(), keys.into_iter().filter(|k| k != key).collect());
+                    }
                 }
                 selected = with.to_string();
                 filter.clear();
@@ -2007,6 +2047,10 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
         f.insert("alternates".into(), json!(alt_overrides));
     }
     f.insert("captureAlt".into(), json!(capture && capture_alt));
+    // A conflict just found is stamped with the bindings it describes.
+    if let Some(c) = conflict.as_mut().filter(|c| c.get("state").is_none()) {
+        c["state"] = json!(conflict_state(&overrides, &alt_overrides, &selected, f.get("activeSet")));
+    }
     f.insert("conflict".into(), conflict.unwrap_or(Value::Null));
     f.insert("hidden".into(), json!(hidden));
     f.insert("colors".into(), json!(colors));
