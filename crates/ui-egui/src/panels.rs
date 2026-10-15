@@ -2240,10 +2240,9 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // of them, as in Photoshop; the controls show the active layer's values.
         let ids: Vec<LayerId> = if selection.len() > 1 && selection.contains(&l.id) { selection.clone() } else { vec![l.id] };
         let targets = if ids.len() > 1 { json!({"layers": ids.iter().map(|id| id.0).collect::<Vec<_>>()}) } else { json!({"layer": l.id.0}) };
-        // Photoshop greys blend mode, Opacity and Fill for the Background layer, also when it is
-        // one of several selected (changing them would turn it into Layer 0).
-        let bg =
-            crate::doc_props_ui::is_background(&doc, l) || ids.iter().any(|id| doc.layer(*id).is_some_and(|x| crate::doc_props_ui::is_background(&doc, x)));
+        // Photoshop greys blend mode, Opacity and Fill for the Background layer. (With the
+        // Background among several selected, what Photoshop does awaits a check: #5856.)
+        let bg = crate::doc_props_ui::is_background(&doc, l);
         // Pass Through is a group's mode: offered only when every target is a group.
         let all_groups = ids.iter().all(|id| doc.layer(*id).is_some_and(|x| x.is_group()));
         ui.horizontal(|ui| {

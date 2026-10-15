@@ -2,7 +2,7 @@
 //! as in Photoshop, not only the active one.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -57,22 +57,4 @@ fn the_basic_lock_toggle_locks_every_selected_layer() {
     let st = h.state().session.active().unwrap();
     let locked = |id: u64| st.doc.layer(photocraft_doc::LayerId(id)).unwrap().locks.all;
     assert!(locked(a) && locked(b), "both selected layers lock");
-}
-
-/// With the Background among the selected layers, blend mode, Opacity and Fill are greyed (as
-/// for the Background alone): changing them would turn it into Layer 0.
-#[test]
-fn the_background_in_a_selection_greys_opacity() {
-    let mut h = app();
-    let st = h.state().session.active().unwrap();
-    let (bg, top) = (st.doc.layers[0].id.0, st.active_layer.unwrap().0);
-    let greyed = |h: &Harness<'static, PhotocraftApp>| h.get_all_by_label("Opacity:").any(|n| n.accesskit_node().is_disabled());
-    assert!(!greyed(&h), "a normal layer alone");
-    // The Background first, then the layer added: the layer is active, both are selected.
-    h.state_mut().run("layer.select", json!({"layer": bg})).unwrap();
-    h.state_mut().run("layer.select", json!({"layer": top, "mode": "add"})).unwrap();
-    h.run_steps(3);
-    assert_eq!(h.state().session.active().unwrap().selected_layers().len(), 2);
-    assert_eq!(h.state().session.active().unwrap().active_layer.map(|l| l.0), Some(top));
-    assert!(greyed(&h), "the Background is selected too");
 }
