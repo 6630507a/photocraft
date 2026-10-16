@@ -586,7 +586,7 @@ fn full_canvas_layer_scenarios(b: &mut Bench, sz: &Sizes) {
             allowance,
             pixels,
             photocraft_ui_egui::gpu_canvas::physical_memory(),
-            g.dedicated_memory(),
+            g.video_memory(),
             0,
         ));
     }

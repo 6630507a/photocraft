@@ -303,12 +303,6 @@ impl GpuCanvas {
         Some((c.resident_bytes(), c.fx_cache_bytes().saturating_add(usize::try_from(c.composite_cache_bytes()).unwrap_or(usize::MAX))))
     }
 
-    /// Whether the adapter has memory of its own (a discrete card): the document's pixels and
-    /// History don't share it ([`memory_budget`]).
-    pub fn dedicated_memory(&self) -> bool {
-        self.rs.adapter.get_info().device_type == wgpu::DeviceType::DiscreteGpu
-    }
-
     /// Whether `doc`'s layers fit the budget as it now stands, measured without a refresh (a GPU
     /// Memory change shows in the status bar at once). `None` before the compositor exists.
     pub fn measure_fit(&self, doc: &photocraft_doc::Document) -> Option<LayerFit> {
@@ -2425,13 +2419,14 @@ mod tests {
     fn gpu_budgets_fit_a_discrete_gpus_own_memory() {
         const G: u64 = 1 << 30;
         let (ram, vram) = (Some(64 * G), Some(8 * G));
-        assert_eq!(memory_budget(64 * G, 3 * G, ram, vram), 3 * G);
+        assert_eq!(memory_budget(64 * G, 3 * G, ram, vram, 0), 3 * G);
         assert_eq!(canvas_budget(ram, vram), 3 * G);
-        assert!(memory_budget(64 * G, 0, ram, vram) + canvas_budget(ram, vram) <= 6 * G, "a quarter of the card stays free");
-        // A card larger than a quarter of RAM changes nothing; a tiny one keeps the floor.
-        assert_eq!(memory_budget(8 * G, 3 * G, Some(48 * G), Some(24 * G)), 5 * G);
+        assert!(memory_budget(64 * G, 0, ram, vram, 0) + canvas_budget(ram, vram) <= 6 * G, "a quarter of the card stays free");
+        // A card larger than a quarter of RAM caps nothing (its own memory isn't charged for the
+        // document's 3 GB); a tiny one keeps the floor.
+        assert_eq!(memory_budget(8 * G, 3 * G, Some(48 * G), Some(24 * G), 0), 8 * G);
         assert_eq!(canvas_budget(Some(16 * G), Some(24 * G)), 4 * G);
-        assert_eq!(memory_budget(64 * G, 0, ram, Some(G)), MIN_GPU_BUDGET);
+        assert_eq!(memory_budget(64 * G, 0, ram, Some(G), 0), MIN_GPU_BUDGET);
         assert_eq!(canvas_budget(ram, Some(G)), MIN_GPU_BUDGET);
     }
 
